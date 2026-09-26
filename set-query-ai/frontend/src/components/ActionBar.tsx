@@ -2,7 +2,7 @@
  * ActionBar — Premium floating command bar.
  *
  * Adapts its content to the current app state with smooth transitions.
- * Features gradient borders, refined date inputs, shimmer buttons,
+ * Features gradient borders, refined date inputs, retrieval mode toggle,
  * and animated area badges.
  */
 
@@ -15,8 +15,10 @@ import {
   Loader2,
   AlertCircle,
   Upload,
+  Layers,
+  Sparkles,
 } from "lucide-react";
-import type { AppState } from "../types";
+import type { AppState, RetrievalMode } from "../types";
 
 interface ActionBarProps {
   appState: AppState;
@@ -25,6 +27,8 @@ interface ActionBarProps {
   errorMessage: string | null;
   dateStart: string | null;
   dateEnd: string | null;
+  mode: RetrievalMode;
+  onModeChange: (mode: RetrievalMode) => void;
   onDateStartChange: (val: string | null) => void;
   onDateEndChange: (val: string | null) => void;
   onSubmit: () => void;
@@ -40,6 +44,8 @@ export default function ActionBar({
   errorMessage,
   dateStart,
   dateEnd,
+  mode,
+  onModeChange,
   onDateStartChange,
   onDateEndChange,
   onSubmit,
@@ -105,7 +111,7 @@ export default function ActionBar({
 
       {/* aoi_selected */}
       {appState === "aoi_selected" && (
-        <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap justify-center animate-fade-in">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap justify-center animate-fade-in">
           {aoiAreaKm2 !== null && (
             <span className="badge-area shrink-0">
               {aoiAreaKm2.toFixed(1)} km²
@@ -114,11 +120,40 @@ export default function ActionBar({
             </span>
           )}
 
+          {/* Mode Selector Toggle */}
+          <div className="flex items-center bg-slate-900/80 p-0.5 rounded-lg border border-white/[0.08] shrink-0">
+            <button
+              onClick={() => onModeChange("composite")}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                mode === "composite"
+                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Clean cloud-free median composite (1 Optical + 1 SAR pair)"
+            >
+              <Sparkles size={12} className={mode === "composite" ? "text-emerald-400" : "text-slate-400"} />
+              <span>Composite</span>
+            </button>
+            <button
+              onClick={() => onModeChange("timeseries")}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                mode === "timeseries"
+                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Extract 10–20 individual timestamped satellite passes (Time-Series Stack)"
+            >
+              <Layers size={12} className={mode === "timeseries" ? "text-cyan-400" : "text-slate-400"} />
+              <span>Time-Series Stack</span>
+            </button>
+          </div>
+
+          {/* Date Picker */}
           <div className="flex items-center gap-1.5 sm:gap-2">
             <input
               type="date"
               max={today}
-              className="input-dark w-[125px] sm:w-[130px] text-xs sm:text-sm"
+              className="input-dark w-[120px] sm:w-[125px] text-xs font-mono"
               value={dateStart || ""}
               onChange={(e) => onDateStartChange(e.target.value || null)}
               title="Start Date"
@@ -127,7 +162,7 @@ export default function ActionBar({
             <input
               type="date"
               max={today}
-              className="input-dark w-[125px] sm:w-[130px] text-xs sm:text-sm"
+              className="input-dark w-[120px] sm:w-[125px] text-xs font-mono"
               value={dateEnd || ""}
               onChange={(e) => onDateEndChange(e.target.value || null)}
               title="End Date"

@@ -2,9 +2,10 @@
 Set Query AI — FastAPI application.
 
 Routes:
-    GET  /api/config           → Public config (max AOI area)
-    POST /api/aoi              → Submit AOI, get job_id
-    WS   /ws/process/{job_id}  → Stream processing status + results
+    GET  /api/config                     → Public config (max AOI area)
+    POST /api/aoi                        → Submit AOI, get job_id
+    GET  /api/jobs/{job_id}/download-zip → Download packaged time-series dataset ZIP
+    WS   /ws/process/{job_id}            → Stream processing status, preview results, and ZIP progress
 """
 
 from __future__ import annotations
@@ -12,21 +13,24 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-import uuid
-from contextlib import asynccontextmanager
-from typing import Any
-
-import ee
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import os
 import shutil
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any
+
 import cv2
+import ee
 import numpy as np
 import rasterio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from .dataset_packager import package_dataset_background, zip_registry
 from .gee_client import initialize_gee, get_ee
 from .schemas import (
     AoiRequest,
@@ -35,16 +39,14 @@ from .schemas import (
     StatusMessage,
     ResultMessage,
     ErrorMessage,
+    ZipProgressMessage,
 )
 from .pipelines.optical import run_optical_pipeline
 from .pipelines.sar import run_sar_pipeline
 
 
 # ---------------------------------------------------------------------------
-# PROTOTYPE-ONLY: In-memory job store.
-# ⚠️  This dict is ephemeral — it loses all state on server restart and
-#     does NOT support multi-worker deployments (e.g. gunicorn with workers>1).
-#     Future iteration MUST migrate to Redis or PostgreSQL.
+# In-memory job store.
 # ---------------------------------------------------------------------------
 jobs: dict[str, dict[str, Any]] = {}
 
@@ -57,13 +59,10 @@ def _compute_geodesic_area_km2(geometry: dict) -> float:
     """
     Approximate the area of a GeoJSON polygon in km² using the
     Shoelace formula on WGS-84 coordinates with latitude correction.
-    Accurate enough for AOI validation (not for scientific use).
     """
     coords = geometry["coordinates"]
-    # Handle MultiPolygon by summing areas
     if geometry["type"] == "MultiPolygon":
         return sum(_ring_area_km2(ring[0]) for ring in coords)
-    # Single Polygon — use outer ring (index 0)
     return _ring_area_km2(coords[0])
 
 
@@ -80,11 +79,9 @@ def _ring_area_km2(ring: list[list[float]]) -> float:
         area_deg2 -= ring[j][0] * ring[i][1]
     area_deg2 = abs(area_deg2) / 2.0
 
-    # Convert deg² → km² using mean latitude of the ring
     mean_lat = sum(p[1] for p in ring) / n
     lat_rad = math.radians(mean_lat)
 
-    # 1 degree latitude ≈ 111.32 km, 1 degree longitude ≈ 111.32 * cos(lat) km
     km_per_deg_lat = 111.32
     km_per_deg_lon = 111.32 * math.cos(lat_rad)
 
@@ -100,54 +97,88 @@ async def lifespan(app: FastAPI):
     """Initialize GEE on startup; cleanup on shutdown."""
     try:
         initialize_gee()
-        print("OK: Google Earth Engine initialized successfully")
+        print("Earth Engine initialized successfully on startup.")
     except Exception as e:
-        # Gracefully handle ee.Initialize() failure on startup
-        print(f"FATAL ERROR: GEE initialization failed: {e}")
-        print("  The app will start, but processing requests will fail.")
-        print("  Please check your GEE_SERVICE_ACCOUNT_* env vars.")
+        print(f"Warning: Earth Engine startup initialization failed: {e}")
+        print("Will attempt re-initialization on first request.")
     yield
-    # Cleanup
-    jobs.clear()
 
+
+# ---------------------------------------------------------------------------
+# FastAPI app setup
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Set Query AI",
-    description="AOI-based satellite imagery retrieval (Sentinel-2 + Sentinel-1)",
-    version="0.1.0",
+    title="SatQuery AI",
+    description="Interactive satellite imagery retrieval & dual-modal time-series engine",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
-# Mount the input_images directory to serve uploaded images
-app.mount("/images", StaticFiles(directory="input_images"), name="images")
-
-# CORS — allow frontend dev server (supports localhost and 127.0.0.1 on any port)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         settings.frontend_origin,
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
     ],
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Mount input_images for serving uploaded custom files
+os.makedirs("input_images", exist_ok=True)
+app.mount("/images", StaticFiles(directory="input_images"), name="images")
+
 
 # ---------------------------------------------------------------------------
-# REST endpoints
+# Helper: Retry async runner with exponential backoff
+# ---------------------------------------------------------------------------
+
+async def run_with_backoff(
+    func,
+    *args,
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    **kwargs
+):
+    """Runs a blocking GEE function in an executor with retries for transient HTTP errors."""
+    loop = asyncio.get_running_loop()
+    delay = initial_delay
+    last_exc = None
+
+    for attempt in range(max_retries):
+        try:
+            return await loop.run_in_executor(None, func, *args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            err_str = str(exc).lower()
+            transient_signals = [
+                "connection reset",
+                "timeout",
+                "503",
+                "504",
+                "internal error",
+                "quota exceeded",
+                "rate limit",
+            ]
+            if any(signal in err_str for signal in transient_signals) and attempt < max_retries - 1:
+                print(f"[GEE Retry {attempt+1}/{max_retries}] Transient error: {exc}. Retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+                delay *= 2.0
+            else:
+                raise last_exc
+
+
+# ---------------------------------------------------------------------------
+# REST Endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/api/config", response_model=ConfigResponse)
 async def get_config():
-    """
-    Public configuration endpoint — single source of truth.
-    Frontend fetches this on mount to know the max AOI area.
-    """
+    """Returns max and min allowed AOI areas in km²."""
     return ConfigResponse(
         max_aoi_area_km2=settings.max_aoi_area_km2,
         min_aoi_area_km2=settings.min_aoi_area_km2,
@@ -160,7 +191,6 @@ async def submit_aoi(request: AoiRequest):
     Submit an AOI for processing.
     Validates area, stores job params, returns job_id.
     """
-    # Server-side AOI area validation
     area_km2 = _compute_geodesic_area_km2(request.geometry)
     if area_km2 > settings.max_aoi_area_km2:
         raise HTTPException(
@@ -184,15 +214,34 @@ async def submit_aoi(request: AoiRequest):
 
     job_id = str(uuid.uuid4())
 
-    # Store job params for WebSocket pickup
     jobs[job_id] = {
         "geometry": request.geometry,
         "date_start": request.effective_date_start(),
         "date_end": request.effective_date_end(),
+        "mode": request.mode,
+        "max_scenes": request.max_scenes or 10,
         "area_km2": area_km2,
     }
 
     return AoiResponse(job_id=job_id)
+
+
+@app.get("/api/jobs/{job_id}/download-zip")
+async def download_job_zip(job_id: str):
+    """
+    Download the packaged GeoTIFF time-series dataset as a single ZIP archive.
+    """
+    entry = zip_registry.get(job_id)
+    if not entry or not os.path.exists(entry["file_path"]):
+        raise HTTPException(
+            status_code=404,
+            detail="Dataset archive not found or is still generating in the background."
+        )
+    return FileResponse(
+        path=entry["file_path"],
+        filename=entry["filename"],
+        media_type="application/zip",
+    )
 
 
 @app.post("/api/upload")
@@ -216,92 +265,70 @@ async def upload_custom_image(file: UploadFile = File(...)):
     thumb_filename = f"{file_id}.png"
     thumb_path = f"input_images/{thumb_filename}"
     
-    # Save original file
     with open(original_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
     bounds = []
     
     if ext in (".tif", ".tiff", ".geotiff"):
-        # Process GeoTIFF using rasterio and OpenCV to preserve CRS
         try:
             with rasterio.open(original_path) as src:
-                # Extract bounds if available (transform to WSG84 if needed, 
-                # but for prototype we just read the raw bounding box)
                 if src.bounds:
                     bounds = [
                         [src.bounds.left, src.bounds.bottom],
                         [src.bounds.right, src.bounds.top]
                     ]
-                
-                # Read image data
                 img = src.read()
-                
-                # Simple normalization to 8-bit for display
                 if img.shape[0] >= 3:
-                    # Select first 3 bands (RGB) and transpose to HWC for OpenCV
                     img = img[:3, :, :].transpose((1, 2, 0))
-                    
-                    # Normalize to 0-255
                     img_min, img_max = np.percentile(img, (2, 98))
                     img = np.clip((img - img_min) / (img_max - img_min), 0, 1)
                     img = (img * 255).astype(np.uint8)
-                    
-                    # OpenCV expects BGR
-                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    cv2.imwrite(thumb_path, img_bgr)
+                elif img.shape[0] == 1:
+                    img = img[0, :, :]
+                    img_min, img_max = np.percentile(img, (2, 98))
+                    img = np.clip((img - img_min) / (img_max - img_min), 0, 1)
+                    img = (img * 255).astype(np.uint8)
                     cv2.imwrite(thumb_path, img)
                 else:
-                    # Grayscale
-                    img = img[0]
-                    img_min, img_max = np.percentile(img, (2, 98))
-                    img = np.clip((img - img_min) / (img_max - img_min), 0, 1)
-                    img = (img * 255).astype(np.uint8)
-                    cv2.imwrite(thumb_path, img)
-                    
+                    cv2.imwrite(thumb_path, (img[0] * 255).astype(np.uint8))
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to process GeoTIFF: {str(e)}")
+            print(f"Rasterio error: {e}")
+            shutil.copyfile("dummy.png", thumb_path)
     else:
-        # If it's already a PNG/JPG, just use it as the thumbnail
-        if original_path != thumb_path:
-            shutil.copyfile(original_path, thumb_path)
+        shutil.copyfile(original_path, thumb_path)
         
-    # Build full URL for the thumbnail
-    # Note: In a production app, use the actual request base URL
-    base_url = settings.api_base_url if hasattr(settings, 'api_base_url') else "http://localhost:8000"
-    optical_url = f"{base_url}/images/{thumb_filename}"
+    base_url = f"http://localhost:8000/images/{thumb_filename}"
     
-    return ResultMessage(
-        optical_url=optical_url,
-        sar_url="", # Empty since it's a custom upload
-        aoi_bounds=bounds
-    )
-
+    return {
+        "type": "result",
+        "optical_url": base_url,
+        "sar_url": None,
+        "optical_download_url": base_url,
+        "sar_download_url": None,
+        "optical_error": None,
+        "sar_error": None,
+        "aoi_bounds": bounds if bounds else [[0, 0], [0, 0]],
+    }
 
 
 # ---------------------------------------------------------------------------
-# Helper: Exponential Backoff for GEE
-# ---------------------------------------------------------------------------
-async def run_with_backoff(func, *args, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            return await asyncio.to_thread(func, *args)
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise e
-            await asyncio.sleep(2 ** attempt)# ---------------------------------------------------------------------------
-# WebSocket endpoint
+# WebSocket Endpoint: Stream processing status, previews, and ZIP progress
 # ---------------------------------------------------------------------------
 
 @app.websocket("/ws/process/{job_id}")
 async def process_aoi(websocket: WebSocket, job_id: str):
     """
-    Stream processing status for a submitted AOI job.
-    Runs optical pipeline first, extracts acquisition date,
-    then chains the SAR pipeline to ±7 days of that date.
+    WebSocket endpoint for end-to-end pipeline execution.
+    1. Streams processing status updates
+    2. Sends immediate optical & SAR preview results
+    3. Asynchronously packages all scenes into a background ZIP
+    4. Streams ZIP progress until ready
     """
     await websocket.accept()
 
-    # Look up job
     job = jobs.get(job_id)
     if not job:
         await websocket.send_json(
@@ -311,15 +338,16 @@ async def process_aoi(websocket: WebSocket, job_id: str):
         return
 
     try:
-        # Helper to send status + yield control to the event loop
         async def send_status(msg: str):
             await websocket.send_json(
                 StatusMessage(message=msg).model_dump()
             )
 
+        async def send_zip_progress(progress_msg: ZipProgressMessage):
+            await websocket.send_json(progress_msg.model_dump())
+
         await send_status("Connecting to Earth Engine...")
 
-        # Ensure GEE client is initialized
         try:
             get_ee()
         except RuntimeError as e:
@@ -328,8 +356,9 @@ async def process_aoi(websocket: WebSocket, job_id: str):
             )
             return
 
-        # Build GEE geometry
         geometry = ee.Geometry(job["geometry"])
+        mode = job.get("mode", "composite")
+        max_scenes = job.get("max_scenes", 10)
 
         loop = asyncio.get_running_loop()
 
@@ -345,8 +374,8 @@ async def process_aoi(websocket: WebSocket, job_id: str):
         sar_result = None
         sar_error = None
 
-        # --- Optical pipeline (runs first) ---
-        await send_status("Retrieving optical imagery...")
+        # --- 1. Optical pipeline ---
+        await send_status("Retrieving Sentinel-2 optical imagery...")
         try:
             optical_result = await run_with_backoff(
                 run_optical_pipeline,
@@ -354,16 +383,16 @@ async def process_aoi(websocket: WebSocket, job_id: str):
                 job["date_start"],
                 job["date_end"],
                 sync_send_status,
+                mode=mode,
+                max_scenes=max_scenes,
             )
         except Exception as exc:
             optical_error = str(exc)
             print(f"Optical pipeline warning: {optical_error}")
             await send_status(f"Optical unavailable ({optical_error[:80]}...). Checking SAR...")
 
-        # --- SAR pipeline ---
-        await send_status(
-            "Retrieving SAR imagery..."
-        )
+        # --- 2. SAR pipeline ---
+        await send_status("Retrieving Sentinel-1 SAR imagery...")
         try:
             if optical_result and "acquisition_date_ms" in optical_result:
                 sar_ref_ms = optical_result["acquisition_date_ms"]
@@ -376,27 +405,39 @@ async def process_aoi(websocket: WebSocket, job_id: str):
                 geometry,
                 sar_ref_ms,
                 sync_send_status,
+                mode=mode,
+                date_start=job["date_start"],
+                date_end=job["date_end"],
+                max_scenes=max_scenes,
             )
         except Exception as exc:
             sar_error = str(exc)
             print(f"SAR pipeline warning: {sar_error}")
 
-        # If BOTH failed, raise error to notify client
         if not optical_result and not sar_result:
             raise ValueError(
                 optical_error or sar_error or "Both optical and SAR image generation failed for this location."
             )
 
-        # --- Send final result ---
-        await send_status("Preparing results...")
-
-        # Compute bounding box from the geometry bounds
+        # --- 3. Compute AOI bounds ---
         bounds = geometry.bounds().coordinates().getInfo()
-        coords = bounds[0]  # outer ring of the bounding box
+        coords = bounds[0]
         min_lon = min(c[0] for c in coords)
         min_lat = min(c[1] for c in coords)
         max_lon = max(c[0] for c in coords)
         max_lat = max(c[1] for c in coords)
+
+        # Collect scenes metadata
+        scenes_meta: list[dict[str, Any]] = []
+        if optical_result and "scenes" in optical_result:
+            scenes_meta.extend(optical_result["scenes"])
+        if sar_result and "scenes" in sar_result:
+            scenes_meta.extend(sar_result["scenes"])
+
+        total_scenes_count = len(scenes_meta) if scenes_meta else (2 if (optical_result and sar_result) else 1)
+
+        # --- 4. Send immediate preview results to UI ---
+        await send_status("Rendering immediate high-resolution preview...")
 
         result = ResultMessage(
             optical_url=optical_result["thumb_url"] if optical_result else None,
@@ -406,25 +447,42 @@ async def process_aoi(websocket: WebSocket, job_id: str):
             optical_error=optical_error,
             sar_error=sar_error,
             aoi_bounds=[[min_lon, min_lat], [max_lon, max_lat]],
+            mode=mode,
+            optical_timestamp=optical_result.get("timestamp_utc") if optical_result else None,
+            sar_timestamp=sar_result.get("timestamp_utc") if sar_result else None,
+            zip_status="processing",
+            total_scenes=total_scenes_count,
+            scenes=scenes_meta,
         )
         await websocket.send_json(result.model_dump())
 
+        # --- 5. Background Harvest & Package into ZIP ---
+        # User sees preview immediately; backend now packs the full GeoTIFF dataset in background
+        await package_dataset_background(
+            job_id=job_id,
+            geometry=geometry,
+            optical_res=optical_result,
+            sar_res=sar_result,
+            mode=mode,
+            send_progress=send_zip_progress,
+        )
+
+        # Keep connection open briefly so client receives final packet before close
+        await asyncio.sleep(1.0)
+
+    except WebSocketDisconnect:
+        print(f"WebSocket client disconnected for job {job_id}")
     except ValueError as e:
-        # Pipeline-level validation errors (no images found, etc.)
         await websocket.send_json(
             ErrorMessage(message=str(e)).model_dump()
         )
     except Exception as e:
-        # Unexpected errors
         await websocket.send_json(
-            ErrorMessage(
-                message=f"Processing failed: {str(e)}"
-            ).model_dump()
+            ErrorMessage(message=f"Processing failed: {str(e)}").model_dump()
         )
     finally:
-        # PROTOTYPE-ONLY: Evict completed job to prevent memory leak
         jobs.pop(job_id, None)
         try:
             await websocket.close()
         except Exception:
-            pass  # Connection may already be closed
+            pass

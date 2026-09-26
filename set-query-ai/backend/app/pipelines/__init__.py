@@ -5,12 +5,27 @@ Shared utilities for satellite imagery pipelines.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from typing import Any
 
 
 # GEE thumbnail API has practical limits around 4096px per side.
 # Beyond this, requests start failing or becoming very slow.
 _MAX_THUMB_DIMENSION = 2048
+
+
+def format_gee_timestamp(time_ms: int | float | None) -> tuple[str, str]:
+    """
+    Convert GEE epoch ms to:
+    - ISO 8601 string: 'YYYY-MM-DDTHH:MM:SSZ'
+    - Filename slug: 'YYYYMMDD_THHMMSSZ'
+    """
+    if not time_ms:
+        now = datetime.now(timezone.utc)
+        return now.strftime("%Y-%m-%dT%H:%M:%SZ"), now.strftime("%Y%m%d_T%H%M%SZ")
+    
+    dt = datetime.fromtimestamp(float(time_ms) / 1000.0, tz=timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), dt.strftime("%Y%m%d_T%H%M%SZ")
 
 
 def compute_thumb_params(

@@ -14,12 +14,19 @@
 
 ## 🌟 Highlights & Key Features
 
-- **Interactive Polygon Selection**: Draw an Area of Interest (AOI) anywhere on the globe using Mapbox GL Draw tools, with automatic area calculation (1–250 km²).
+- **Dual Retrieval Modes**:
+  - **Cloud-Free Composite**: Statistical median cloud & speckle filtering for instant visual baseline (1 Optical RGB + 1 SAR pair).
+  - **Time-Series Stack (10–20 Passes)**: Multi-scene temporal harvesting of individual satellite passes for change detection and multimodal AI models (EarthDial, EarthMind, Telescoper).
 - **Dual-Modal Satellite Pipelines**:
   - **Sentinel-2 Optical**: True-color RGB (Bands 4, 3, 2) filtered for low cloud cover from `COPERNICUS/S2_SR_HARMONIZED`.
   - **Sentinel-1 SAR Radar**: All-weather C-band backscatter (VV / VH polarizations) from `COPERNICUS/S1_GRD` that penetrates clouds and captures surface structure.
-- **Cross-Modal Temporal Chaining**: The Optical pipeline executes first, and the SAR pipeline automatically filters to ±7 days of the optical acquisition date for maximum physical coherence.
-- **Real-Time Streaming**: Full WebSocket status pipeline streaming progress, status updates, and preview tiles to the frontend in real time.
+- **Asynchronous Dataset Harvester**: Instant high-resolution preview delivery in 2–3 seconds while full 10m GeoTIFFs are downloaded and packaged in the background into a single `.zip` archive.
+- **Strict GeoTIFF & Timestamp Preservation**:
+  - Standardized filename convention: `SatQuery_[Sensor]_[Modality]_[YYYYMMDD]_[THHMMSSZ].tif`.
+  - Native 10m spatial resolution and CRS projection metadata preserved.
+  - Natural alphabetical sorting ($A \rightarrow Z$) = strict chronological order ($T_1 \rightarrow T_n$).
+- **Cross-Modal Temporal Chaining**: Optical pipeline executes first, and SAR automatically filters to ±7 days of optical acquisition for maximum physical coherence.
+- **Real-Time Streaming**: WebSocket telemetry streaming live pipeline status and background ZIP compression progress.
 - **Custom Image Upload & Analysis**: Upload external GeoTIFF or PNG imagery to analyze custom spatial datasets using Rasterio and OpenCV.
 - **One-Click Launch**: Instant startup via `start.bat` orchestrating both frontend and backend dev environments simultaneously.
 

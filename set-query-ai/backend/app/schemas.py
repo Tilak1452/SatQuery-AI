@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 # ---------------------------------------------------------------------------
 
 class AoiRequest(BaseModel):
-    """GeoJSON geometry for the area of interest, plus optional date window."""
+    """GeoJSON geometry for the area of interest, plus optional date window and mode."""
 
     geometry: dict[str, Any] = Field(
         ...,
@@ -29,6 +29,16 @@ class AoiRequest(BaseModel):
     date_end: Optional[date] = Field(
         default=None,
         description="End of date range (defaults to today)",
+    )
+    mode: Literal["composite", "timeseries"] = Field(
+        default="composite",
+        description="Retrieval mode: 'composite' (cloud-free pair) or 'timeseries' (multi-scene stack)",
+    )
+    max_scenes: Optional[int] = Field(
+        default=10,
+        ge=2,
+        le=20,
+        description="Max scenes to harvest in timeseries mode (default 10)",
     )
 
     @field_validator("geometry")
@@ -71,8 +81,30 @@ class StatusMessage(BaseModel):
     message: str
 
 
+class ZipProgressMessage(BaseModel):
+    """Background dataset zipping progress update."""
+    type: Literal["zip_progress"] = "zip_progress"
+    job_id: str
+    status: Literal["processing", "ready", "failed"]
+    progress_pct: int
+    message: str
+    download_url: Optional[str] = None
+    size_mb: Optional[float] = None
+    total_scenes: Optional[int] = None
+
+
+class SceneInfo(BaseModel):
+    """Metadata for an individual harvested satellite scene."""
+    filename: str
+    sensor: Literal["Sentinel-2", "Sentinel-1"]
+    modality: Literal["Optical RGB", "SAR VV"]
+    timestamp_utc: str
+    cloud_pct: Optional[float] = None
+    download_url: Optional[str] = None
+
+
 class ResultMessage(BaseModel):
-    """Final result containing image URLs."""
+    """Final result containing image preview URLs and dataset metadata."""
     type: Literal["result"] = "result"
     optical_url: Optional[str] = None
     sar_url: Optional[str] = None
@@ -81,6 +113,14 @@ class ResultMessage(BaseModel):
     optical_error: Optional[str] = None
     sar_error: Optional[str] = None
     aoi_bounds: list[list[float]]  # [[minLon, minLat], [maxLon, maxLat]]
+    mode: Literal["composite", "timeseries"] = "composite"
+    optical_timestamp: Optional[str] = None
+    sar_timestamp: Optional[str] = None
+    zip_status: Optional[Literal["pending", "processing", "ready", "failed"]] = "pending"
+    zip_url: Optional[str] = None
+    zip_size_mb: Optional[float] = None
+    total_scenes: Optional[int] = None
+    scenes: list[SceneInfo] = Field(default_factory=list)
 
 
 class ErrorMessage(BaseModel):

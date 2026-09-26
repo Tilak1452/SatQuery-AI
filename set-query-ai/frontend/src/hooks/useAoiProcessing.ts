@@ -2,7 +2,8 @@
  * useAoiProcessing — Central state machine + WebSocket lifecycle.
  *
  * Manages the full flow: idle → aoi_selected → processing → results_ready | error
- * Fetches server config on mount for DRY AOI area validation.
+ * Supports both Cloud-Free Composite mode and Multi-Scene Time-Series mode.
+ * Streams real-time ZIP dataset packaging in the background while displaying immediate previews.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -10,7 +11,9 @@ import type {
   AoiGeometry,
   ProcessingState,
   ResultPayload,
+  RetrievalMode,
   WsMessage,
+  ZipProgressMessage,
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -46,9 +49,6 @@ function computeAreaKm2(geometry: AoiGeometry): number {
 }
 
 export function useAoiProcessing() {
-  // ---------------------------------------------------------------------------
-  // State
-  // ---------------------------------------------------------------------------
   const [state, setState] = useState<ProcessingState>({
     appState: "idle",
     aoiGeometry: null,
@@ -56,17 +56,17 @@ export function useAoiProcessing() {
     statusMessages: [],
     result: null,
     errorMessage: null,
-    maxAoiAreaKm2: 250, // default fallback; overwritten by server config
-    minAoiAreaKm2: 1.0, // default fallback
+    maxAoiAreaKm2: 250,
+    minAoiAreaKm2: 1.0,
     dateStart: null,
     dateEnd: null,
+    mode: "composite",
+    zipProgress: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // ---------------------------------------------------------------------------
-  // Fetch server config on mount (single source of truth for max area)
-  // ---------------------------------------------------------------------------
+  // Fetch server config on mount
   useEffect(() => {
     fetch(`${API_BASE}/api/config`)
       .then((r) => r.json())
@@ -83,9 +83,7 @@ export function useAoiProcessing() {
       });
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // AOI selection
-  // ---------------------------------------------------------------------------
+  // Set AOI Geometry with area validation
   const setAoi = useCallback((geometry: AoiGeometry | null) => {
     if (!geometry) {
       setState((s) => ({
@@ -94,15 +92,13 @@ export function useAoiProcessing() {
         aoiGeometry: null,
         aoiAreaKm2: null,
         errorMessage: null,
-        dateStart: s.dateStart,
-        dateEnd: s.dateEnd,
+        zipProgress: null,
       }));
       return;
     }
 
     const area = computeAreaKm2(geometry);
 
-    // Use functional setState so we always read the latest max/min from state
     setState((s) => {
       if (area > s.maxAoiAreaKm2) {
         return {
@@ -132,13 +128,12 @@ export function useAoiProcessing() {
         errorMessage: null,
         statusMessages: [],
         result: null,
+        zipProgress: null,
       };
     });
   }, []);
 
-  // ---------------------------------------------------------------------------
   // Submit AOI + open WebSocket
-  // ---------------------------------------------------------------------------
   const submitAoi = useCallback(async () => {
     if (!state.aoiGeometry) return;
 
@@ -148,10 +143,10 @@ export function useAoiProcessing() {
       statusMessages: [],
       result: null,
       errorMessage: null,
+      zipProgress: null,
     }));
 
     try {
-      // POST the AOI to get a job_id
       const res = await fetch(`${API_BASE}/api/aoi`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -159,6 +154,8 @@ export function useAoiProcessing() {
           geometry: state.aoiGeometry,
           date_start: state.dateStart || undefined,
           date_end: state.dateEnd || undefined,
+          mode: state.mode,
+          max_scenes: state.mode === "timeseries" ? 12 : 2,
         }),
       });
 
@@ -169,7 +166,6 @@ export function useAoiProcessing() {
 
       const { job_id } = await res.json();
 
-      // Open WebSocket for streaming status
       const ws = new WebSocket(`${WS_BASE}/ws/process/${job_id}`);
       wsRef.current = ws;
 
@@ -189,8 +185,42 @@ export function useAoiProcessing() {
               ...s,
               appState: "results_ready",
               result: msg as ResultPayload,
+              zipProgress: {
+                status: "processing",
+                progress_pct: 10,
+                message: "Harvesting & packaging GeoTIFF dataset in background...",
+              },
             }));
             break;
+
+          case "zip_progress": {
+            const zMsg = msg as ZipProgressMessage;
+            setState((s) => {
+              const updatedResult = s.result
+                ? {
+                    ...s.result,
+                    zip_status: zMsg.status,
+                    zip_url: zMsg.download_url || s.result.zip_url,
+                    zip_size_mb: zMsg.size_mb || s.result.zip_size_mb,
+                    total_scenes: zMsg.total_scenes || s.result.total_scenes,
+                  }
+                : null;
+
+              return {
+                ...s,
+                result: updatedResult,
+                zipProgress: {
+                  status: zMsg.status,
+                  progress_pct: zMsg.progress_pct,
+                  message: zMsg.message,
+                  download_url: zMsg.download_url,
+                  size_mb: zMsg.size_mb,
+                  total_scenes: zMsg.total_scenes,
+                },
+              };
+            });
+            break;
+          }
 
           case "error":
             setState((s) => ({
@@ -224,11 +254,9 @@ export function useAoiProcessing() {
         errorMessage: msg,
       }));
     }
-  }, [state.aoiGeometry, state.dateStart, state.dateEnd]);
+  }, [state.aoiGeometry, state.dateStart, state.dateEnd, state.mode]);
 
-  // ---------------------------------------------------------------------------
-  // Custom Image Upload
-  // ---------------------------------------------------------------------------
+  // Upload Custom Image
   const uploadImage = useCallback(async (file: File) => {
     setState((s) => ({
       ...s,
@@ -236,6 +264,7 @@ export function useAoiProcessing() {
       statusMessages: ["Uploading custom image..."],
       result: null,
       errorMessage: null,
+      zipProgress: null,
     }));
 
     try {
@@ -268,31 +297,29 @@ export function useAoiProcessing() {
     }
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // Reset (start over)
-  // ---------------------------------------------------------------------------
+  // Reset
   const reset = useCallback(() => {
-    // Close any open WebSocket
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
 
-    setState({
+    setState((s) => ({
       appState: "idle",
       aoiGeometry: null,
       aoiAreaKm2: null,
       statusMessages: [],
       result: null,
       errorMessage: null,
-      maxAoiAreaKm2: state.maxAoiAreaKm2, // preserve server config
-      minAoiAreaKm2: state.minAoiAreaKm2,
-      dateStart: state.dateStart, // preserve dates across reset
-      dateEnd: state.dateEnd,
-    });
-  }, [state.maxAoiAreaKm2, state.dateStart, state.dateEnd]);
+      maxAoiAreaKm2: s.maxAoiAreaKm2,
+      minAoiAreaKm2: s.minAoiAreaKm2,
+      dateStart: s.dateStart,
+      dateEnd: s.dateEnd,
+      mode: s.mode,
+      zipProgress: null,
+    }));
+  }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (wsRef.current) {
@@ -306,6 +333,7 @@ export function useAoiProcessing() {
     setAoi,
     setDateStart: (date: string | null) => setState((s) => ({ ...s, dateStart: date })),
     setDateEnd: (date: string | null) => setState((s) => ({ ...s, dateEnd: date })),
+    setMode: (mode: RetrievalMode) => setState((s) => ({ ...s, mode })),
     submitAoi,
     uploadImage,
     reset,

@@ -1,5 +1,5 @@
 /**
- * Shared TypeScript types for Set Query AI.
+ * Shared TypeScript types for SatQuery AI.
  */
 
 // ---------------------------------------------------------------------------
@@ -12,6 +12,8 @@ export type AppState =
   | "processing"
   | "results_ready"
   | "error";
+
+export type RetrievalMode = "composite" | "timeseries";
 
 // ---------------------------------------------------------------------------
 // Server config (fetched from GET /api/config)
@@ -32,6 +34,28 @@ export interface AoiGeometry {
 }
 
 // ---------------------------------------------------------------------------
+// Scene & Dataset Types
+// ---------------------------------------------------------------------------
+
+export interface SceneMetadata {
+  filename: string;
+  sensor: string;
+  modality: string;
+  timestamp_utc: string;
+  cloud_pct?: number | null;
+  download_url?: string;
+}
+
+export interface ZipProgressInfo {
+  status: "pending" | "processing" | "ready" | "failed";
+  progress_pct: number;
+  message: string;
+  download_url?: string;
+  size_mb?: number;
+  total_scenes?: number;
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket messages (server → client)
 // ---------------------------------------------------------------------------
 
@@ -49,6 +73,25 @@ export interface ResultPayload {
   optical_error?: string | null;
   sar_error?: string | null;
   aoi_bounds?: [number, number][];
+  mode?: RetrievalMode;
+  optical_timestamp?: string | null;
+  sar_timestamp?: string | null;
+  zip_status?: "pending" | "processing" | "ready" | "failed";
+  zip_url?: string | null;
+  zip_size_mb?: number | null;
+  total_scenes?: number | null;
+  scenes?: SceneMetadata[];
+}
+
+export interface ZipProgressMessage {
+  type: "zip_progress";
+  job_id: string;
+  status: "processing" | "ready" | "failed";
+  progress_pct: number;
+  message: string;
+  download_url?: string;
+  size_mb?: number;
+  total_scenes?: number;
 }
 
 export interface ErrorPayload {
@@ -56,7 +99,7 @@ export interface ErrorPayload {
   message: string;
 }
 
-export type WsMessage = StatusMessage | ResultPayload | ErrorPayload;
+export type WsMessage = StatusMessage | ResultPayload | ErrorPayload | ZipProgressMessage;
 
 // ---------------------------------------------------------------------------
 // AOI processing hook state
@@ -73,4 +116,6 @@ export interface ProcessingState {
   minAoiAreaKm2: number;
   dateStart: string | null;
   dateEnd: string | null;
+  mode: RetrievalMode;
+  zipProgress: ZipProgressInfo | null;
 }

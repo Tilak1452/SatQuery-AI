@@ -1,10 +1,8 @@
 /**
- * App.tsx — Root component for Set Query AI.
+ * App.tsx — Root component for SatQuery AI.
  *
  * Composes MapView, ActionBar, LoadingScreen, ResultsPanel, and SearchBar
  * using state from the useAoiProcessing hook.
- *
- * Features ambient background gradient visible through transparent panels.
  */
 
 import { useRef } from "react";
@@ -30,20 +28,23 @@ export default function App() {
     errorMessage,
     dateStart,
     dateEnd,
+    mode,
+    zipProgress,
     setAoi,
     setDateStart,
     setDateEnd,
+    setMode,
     submitAoi,
     uploadImage,
     reset,
   } = useAoiProcessing();
 
-  const handleLocationSelect = (result: any) => {
+  const handleLocationSelect = (selectedResult: any) => {
     if (!mapRef.current) return;
 
-    if (result.geometry) {
-      setAoi(result.geometry);
-      const coords = result.geometry.coordinates[0];
+    if (selectedResult.geometry) {
+      setAoi(selectedResult.geometry);
+      const coords = selectedResult.geometry.coordinates[0];
       const minLng = Math.min(...coords.map((c: any) => c[0]));
       const maxLng = Math.max(...coords.map((c: any) => c[0]));
       const minLat = Math.min(...coords.map((c: any) => c[1]));
@@ -56,8 +57,8 @@ export default function App() {
         ],
         { padding: 100, duration: 1500 }
       );
-    } else if (result.bbox) {
-      const [minLng, minLat, maxLng, maxLat] = result.bbox;
+    } else if (selectedResult.bbox) {
+      const [minLng, minLat, maxLng, maxLat] = selectedResult.bbox;
       mapRef.current.fitBounds(
         [
           [minLng, minLat],
@@ -67,7 +68,7 @@ export default function App() {
       );
     } else {
       mapRef.current.flyTo({
-        center: result.center,
+        center: selectedResult.center,
         zoom: 14,
         duration: 1500,
       });
@@ -108,7 +109,7 @@ export default function App() {
         onAoiChange={setAoi}
       />
 
-      {/* ── Loading Screen (visible during processing) ── */}
+      {/* ── Loading Screen (visible during initial processing) ── */}
       <LoadingScreen
         messages={statusMessages}
         visible={appState === "processing"}
@@ -117,6 +118,7 @@ export default function App() {
       {/* ── Results panel (visible when results are ready) ── */}
       <ResultsPanel
         result={result}
+        zipProgress={zipProgress}
         visible={appState === "results_ready"}
         onClose={reset}
       />
@@ -129,6 +131,8 @@ export default function App() {
         errorMessage={errorMessage}
         dateStart={dateStart}
         dateEnd={dateEnd}
+        mode={mode}
+        onModeChange={setMode}
         onDateStartChange={setDateStart}
         onDateEndChange={setDateEnd}
         onSubmit={submitAoi}

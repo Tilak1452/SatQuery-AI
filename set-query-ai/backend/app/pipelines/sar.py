@@ -1,121 +1,139 @@
 """
 Sentinel-1 SAR backscatter pipeline.
 
-Queries COPERNICUS/S1_GRD within a ±7 day window of the optical
-acquisition date (temporal chaining), applies speckle filtering
-(focal median), and produces a VV/VH/VV-VH composite.
+Queries COPERNICUS/S1_GRD:
+- In "composite" mode: temporally chained to ±7 days of optical acquisition,
+  producing a speckle-reduced median composite.
+- In "timeseries" mode: provides instant preview of nearest pass + metadata
+  for all available SAR passes in the window.
 
-The SAR pipeline is intentionally sequential after the optical pipeline
-to ensure cross-modal temporal coherence.
+All downloads are named with precise UTC acquisition timestamps:
+Format: SatQuery_S1_SAR_VV_YYYYMMDD_THHMMSSZ.tif
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import ee
 
-# Temporal window around optical acquisition date (days)
+from . import compute_thumb_params, format_gee_timestamp
+
+
 SAR_TEMPORAL_WINDOW_DAYS = 7
-
-
-def _apply_speckle_filter(image: ee.Image) -> ee.Image:
-    """Apply focal median speckle filter — kept for potential future use
-    but NOT called in the main pipeline. The temporal median composite
-    over multiple acquisitions already reduces speckle without blurring edges."""
-    return image.focalMedian(
-        radius=15,
-        kernelType="circle",
-        units="meters",
-    )
 
 
 def run_sar_pipeline(
     geometry: ee.Geometry,
     optical_acquisition_date_ms: int,
     send_status: Callable[[str], Any],
+    mode: str = "composite",
+    date_start: Any = None,
+    date_end: Any = None,
+    max_scenes: int = 10,
 ) -> dict:
     """
-    Execute the Sentinel-1 SAR pipeline, temporally chained to optical.
-
-    Args:
-        geometry: ee.Geometry for the AOI.
-        optical_acquisition_date_ms: system:time_start from the optical image (ms).
-        send_status: Callback to stream status messages to the client.
-
-    Returns:
-        dict with keys: thumb_url, download_url
+    Execute the Sentinel-1 SAR pipeline.
     """
-    # Compute ±7 day window around optical acquisition
-    optical_dt = datetime.utcfromtimestamp(optical_acquisition_date_ms / 1000)
-    sar_start = optical_dt - timedelta(days=SAR_TEMPORAL_WINDOW_DAYS)
-    sar_end = optical_dt + timedelta(days=SAR_TEMPORAL_WINDOW_DAYS)
+    optical_dt = datetime.fromtimestamp(optical_acquisition_date_ms / 1000, tz=timezone.utc)
 
-    send_status(
-        f"Filtering Sentinel-1 SAR imagery "
-        f"(±{SAR_TEMPORAL_WINDOW_DAYS}d of optical: "
-        f"{sar_start.strftime('%Y-%m-%d')} to {sar_end.strftime('%Y-%m-%d')})..."
-    )
+    if mode == "timeseries" and date_start and date_end:
+        sar_start_str = str(date_start)
+        sar_end_str = str(date_end)
+        send_status(f"Querying Sentinel-1 SAR time-series ({sar_start_str} to {sar_end_str})...")
+    else:
+        sar_start = optical_dt - timedelta(days=SAR_TEMPORAL_WINDOW_DAYS)
+        sar_end = optical_dt + timedelta(days=SAR_TEMPORAL_WINDOW_DAYS)
+        sar_start_str = sar_start.strftime("%Y-%m-%d")
+        sar_end_str = sar_end.strftime("%Y-%m-%d")
+        send_status(
+            f"Filtering Sentinel-1 SAR imagery "
+            f"(±{SAR_TEMPORAL_WINDOW_DAYS}d of optical: {sar_start_str} to {sar_end_str})..."
+        )
 
     collection = (
         ee.ImageCollection("COPERNICUS/S1_GRD")
         .filterBounds(geometry)
-        .filterDate(sar_start.strftime("%Y-%m-%d"), sar_end.strftime("%Y-%m-%d"))
+        .filterDate(sar_start_str, sar_end_str)
         .filter(ee.Filter.eq("instrumentMode", "IW"))
         .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
-        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
     )
 
     count = collection.size().getInfo()
     if count == 0:
+        # Fallback to wider 30-day window around optical date
+        fallback_start = optical_dt - timedelta(days=30)
+        fallback_end = optical_dt + timedelta(days=30)
+        collection = (
+            ee.ImageCollection("COPERNICUS/S1_GRD")
+            .filterBounds(geometry)
+            .filterDate(fallback_start.strftime("%Y-%m-%d"), fallback_end.strftime("%Y-%m-%d"))
+            .filter(ee.Filter.eq("instrumentMode", "IW"))
+            .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+        )
+        count = collection.size().getInfo()
+
+    if count == 0:
         raise ValueError(
-            f"No Sentinel-1 SAR images found for the selected AOI "
-            f"within ±{SAR_TEMPORAL_WINDOW_DAYS} days of the optical acquisition "
-            f"({optical_dt.strftime('%Y-%m-%d')}). "
-            f"Try a different date range."
+            f"No Sentinel-1 SAR images found for the selected AOI near "
+            f"({optical_dt.strftime('%Y-%m-%d')}). Try expanding the date range."
         )
 
-    send_status(f"Found {count} Sentinel-1 images. Building SAR composite...")
+    # Closest image in time to the optical date
+    first_image = ee.Image(collection.first())
+    sar_time_ms = first_image.get("system:time_start").getInfo()
+    sar_iso, sar_slug = format_gee_timestamp(sar_time_ms)
 
-    # Create a median composite from all images in the window.
-    # Temporal median across multiple acquisitions is a highly effective
-    # speckle reducer that preserves spatial edges — no spatial filtering needed.
-    composite = collection.median()
+    scenes_metadata: list[dict[str, Any]] = []
 
-    # Select VV band — provides the sharpest urban detail via double-bounce
-    # returns from buildings. Using VV alone is sharper than the VV+VH average
-    # because VH adds noise without adding urban structural detail.
-    vv = composite.select("VV")
+    if mode == "timeseries":
+        send_status(f"Harvesting metadata for top {min(count, max_scenes)} SAR passes...")
+        sar_scenes = collection.limit(max_scenes)
+        features = sar_scenes.getInfo().get("features", [])
+        for feat in features:
+            props = feat.get("properties", {})
+            t_ms = props.get("system:time_start")
+            t_iso, t_slug = format_gee_timestamp(t_ms)
+            scenes_metadata.append({
+                "id": feat.get("id"),
+                "sensor": "Sentinel-1",
+                "modality": "SAR VV",
+                "time_ms": t_ms,
+                "timestamp_utc": t_iso,
+                "slug": t_slug,
+                "filename": f"SatQuery_S1_SAR_VV_{t_slug}.tif",
+            })
 
-    # Clip to bounding box and fill any boundary nodata with -30 dB (rendered black)
     thumb_region = geometry.bounds()
+    bounds_info = thumb_region.coordinates().getInfo()
+    thumb_params = compute_thumb_params(bounds_info[0], native_scale=10)
+
+    if mode == "timeseries":
+        # Primary preview: use closest single image
+        send_status(f"Selected SAR pass ({sar_iso}) for instant preview...")
+        vv = first_image.select("VV")
+    else:
+        send_status(f"Found {count} Sentinel-1 images. Building SAR composite...")
+        composite = collection.median()
+        vv = composite.select("VV")
+
     sar_vis = vv.unmask(-30).clip(thumb_region).visualize(
         min=-20,
         max=2,
     )
 
-    send_status("Generating SAR preview and download URLs...")
+    send_status("Generating SAR preview...")
 
-    # Compute optimal thumb parameters — native scale for small AOIs,
-    # dimension-capped for large AOIs to avoid GEE limits.
-    from . import compute_thumb_params
-    bounds_info = thumb_region.coordinates().getInfo()
-    thumb_params = compute_thumb_params(bounds_info[0], native_scale=10)
-
-    # Thumbnail URL for display
     thumb_url = sar_vis.getThumbURL({
         "region": thumb_region,
         "format": "png",
         **thumb_params,
     })
 
-    # Combine into a single multi-band image for pure VV and VH download
-    # To stay under the 32MB limit, we use the 8-bit visualization instead of raw float values
-    
-    # Download URL (GeoTIFF)
+    download_name = f"SatQuery_S1_SAR_VV_{sar_slug}"
     download_url = sar_vis.getDownloadURL({
-        "name": "sar_composite",
+        "name": download_name,
         "region": geometry,
         "scale": 10,
         "format": "GEO_TIFF",
@@ -124,4 +142,7 @@ def run_sar_pipeline(
     return {
         "thumb_url": thumb_url,
         "download_url": download_url,
+        "timestamp_utc": sar_iso,
+        "filename_slug": sar_slug,
+        "scenes": scenes_metadata,
     }
