@@ -4,6 +4,6 @@ earthengine-api
 pydantic
 pydantic-settings
 python-dotenv
-opencv-python
+opencv-python-headless
 rasterio
 python-multipart
