@@ -110,17 +110,17 @@ def run_sar_pipeline(
     thumb_params = compute_thumb_params(bounds_info[0], native_scale=10)
 
     if mode == "timeseries":
-        # Primary preview: use closest single image
-        send_status(f"Selected SAR pass ({sar_iso}) for instant preview...")
-        vv = first_image.select("VV")
+        # Primary preview: use closest single image with spatial speckle reduction
+        send_status(f"Selected SAR pass ({sar_iso}) with speckle reduction for instant preview...")
+        vv = first_image.select("VV").focalMedian(radius=15, kernelType="circle", units="meters")
     else:
         send_status(f"Found {count} Sentinel-1 images. Building SAR composite...")
         composite = collection.median()
         vv = composite.select("VV")
 
-    sar_vis = vv.unmask(-30).clip(thumb_region).visualize(
-        min=-20,
-        max=2,
+    sar_vis = vv.unmask(-25).clip(thumb_region).visualize(
+        min=-22,
+        max=1,
     )
 
     send_status("Generating SAR preview...")

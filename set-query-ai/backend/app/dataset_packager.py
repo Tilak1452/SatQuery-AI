@@ -203,7 +203,12 @@ async def package_dataset_background(
                             .visualize(min=0.0, max=0.28, gamma=1.3)
                         )
                     else:
-                        vis_img = raw_img.select("VV").unmask(-30).visualize(min=-20, max=2)
+                        vis_img = (
+                            raw_img.select("VV")
+                            .focalMedian(15, "circle", "meters")
+                            .unmask(-25)
+                            .visualize(min=-22, max=1)
+                        )
 
                     slug_name = os.path.splitext(s_filename)[0]
                     return vis_img.getDownloadURL({
