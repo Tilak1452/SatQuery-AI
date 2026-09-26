@@ -18,6 +18,10 @@ class Settings(BaseSettings):
         default="./secrets/gee-service-account.json",
         description="Path to the GEE service account JSON key file",
     )
+    gee_service_account_json: str = Field(
+        default="",
+        description="Raw JSON string of GEE service account key for cloud deployment",
+    )
     gee_service_account_email: str = Field(
         default="",
         description="Email address of the GEE service account",

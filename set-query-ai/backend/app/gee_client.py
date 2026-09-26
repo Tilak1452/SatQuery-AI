@@ -33,6 +33,17 @@ def initialize_gee() -> None:
     key_path = get_key_path()
     project_id = settings.gee_project or None
 
+    # Cloud Deployment Support: If GEE_SERVICE_ACCOUNT_JSON is set in environment (e.g. Render/Railway),
+    # write it to key_path so ee.ServiceAccountCredentials can load it seamlessly.
+    if settings.gee_service_account_json and not key_path.is_file():
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(key_path, "w", encoding="utf-8") as f:
+                f.write(settings.gee_service_account_json.strip())
+            print(f"Info: Loaded service account key from GEE_SERVICE_ACCOUNT_JSON environment variable.")
+        except Exception as write_err:
+            print(f"Warning: Could not write GEE_SERVICE_ACCOUNT_JSON to '{key_path}': {write_err}")
+
     try:
         if key_path.is_file():
             email = settings.gee_service_account_email

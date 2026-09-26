@@ -35,7 +35,6 @@ export default function App() {
     setDateEnd,
     setMode,
     submitAoi,
-    uploadImage,
     reset,
   } = useAoiProcessing();
 
@@ -136,7 +135,6 @@ export default function App() {
         onDateStartChange={setDateStart}
         onDateEndChange={setDateEnd}
         onSubmit={submitAoi}
-        onUploadImage={uploadImage}
         onClear={() => setAoi(null)}
         onReset={reset}
       />

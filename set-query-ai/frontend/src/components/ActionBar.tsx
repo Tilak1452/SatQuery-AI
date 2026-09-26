@@ -6,7 +6,6 @@
  * and animated area badges.
  */
 
-import { useRef } from "react";
 import {
   Crosshair,
   Send,
@@ -14,7 +13,6 @@ import {
   RotateCcw,
   Loader2,
   AlertCircle,
-  Upload,
   Layers,
   Sparkles,
 } from "lucide-react";
@@ -32,7 +30,6 @@ interface ActionBarProps {
   onDateStartChange: (val: string | null) => void;
   onDateEndChange: (val: string | null) => void;
   onSubmit: () => void;
-  onUploadImage: (file: File) => void;
   onClear: () => void;
   onReset: () => void;
 }
@@ -49,18 +46,10 @@ export default function ActionBar({
   onDateStartChange,
   onDateEndChange,
   onSubmit,
-  onUploadImage,
   onClear,
   onReset,
 }: ActionBarProps) {
   const today = new Date().toISOString().split("T")[0];
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      onUploadImage(e.target.files[0]);
-    }
-  };
 
   return (
     <div
@@ -88,24 +77,6 @@ export default function ActionBar({
               Draw a polygon on the map to select your area of interest
             </span>
           </div>
-
-          <div className="hidden sm:block w-px h-6 bg-white/[0.06]" />
-
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            accept=".tif,.tiff,.geotiff,.png,.jpg,.jpeg"
-            onChange={handleFileChange}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="btn-secondary"
-            title="Upload Custom Image"
-          >
-            <Upload size={14} />
-            <span className="text-xs sm:text-sm">Upload Image</span>
-          </button>
         </div>
       )}
 
