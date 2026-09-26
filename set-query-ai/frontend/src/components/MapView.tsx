@@ -20,6 +20,30 @@ import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
+// High-resolution global satellite tiles (Zero-token open fallback)
+const OPEN_SATELLITE_STYLE: any = {
+  version: 8,
+  sources: {
+    "esri-satellite": {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      attribution: "Tiles © Esri, Maxar, Earthstar Geographics",
+    },
+  },
+  layers: [
+    {
+      id: "esri-satellite-layer",
+      type: "raster",
+      source: "esri-satellite",
+      minzoom: 0,
+      maxzoom: 20,
+    },
+  ],
+};
+
 interface MapViewProps {
   appState: AppState;
   aoi?: AoiGeometry | null;
@@ -36,6 +60,14 @@ export default function MapView({
   const drawRef = useRef<MapboxDraw | null>(null);
   const [is3D, setIs3D] = useState(false);
   const [isSentinel, setIsSentinel] = useState(false);
+
+  // If token is missing or is the expired placeholder mr-x key, use open satellite style directly
+  const isInvalidToken = !MAPBOX_TOKEN || MAPBOX_TOKEN.includes("mr-x");
+  const [currentStyle, setCurrentStyle] = useState<any>(
+    isInvalidToken
+      ? OPEN_SATELLITE_STYLE
+      : "mapbox://styles/mapbox/satellite-streets-v12"
+  );
 
   // Initialize MapboxDraw when map loads
   const handleMapLoad = useCallback(() => {
@@ -132,25 +164,37 @@ export default function MapView({
     map.on("draw.update", updateAoi);
     map.on("draw.delete", () => onAoiChange(null));
 
-    // Add 3D Terrain source
-    map.addSource("mapbox-dem", {
-      type: "raster-dem",
-      url: "mapbox://mapbox.mapbox-terrain-dem-v1",
-      tileSize: 512,
-      maxzoom: 14,
-    });
+    // Add 3D Terrain source safely
+    if (map.getSource && !map.getSource("mapbox-dem")) {
+      try {
+        map.addSource("mapbox-dem", {
+          type: "raster-dem",
+          url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+          tileSize: 512,
+          maxzoom: 14,
+        });
+      } catch (e) {
+        // Ignored if mapbox-dem is not supported by style
+      }
+    }
 
-    // Add Sentinel-2 Global Mosaic Fallback
-    map.addSource("sentinel-2", {
-      type: "raster",
-      tiles: [
-        "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg",
-      ],
-      tileSize: 256,
-      maxzoom: 14,
-      attribution:
-        'Sentinel-2 cloudless - <a href="https://s2maps.eu">s2maps.eu</a> by <a href="https://eox.at">EOX IT Services GmbH</a>',
-    });
+    // Add Sentinel-2 Global Mosaic Fallback safely
+    if (map.getSource && !map.getSource("sentinel-2")) {
+      try {
+        map.addSource("sentinel-2", {
+          type: "raster",
+          tiles: [
+            "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg",
+          ],
+          tileSize: 256,
+          maxzoom: 14,
+          attribution:
+            'Sentinel-2 cloudless - <a href="https://s2maps.eu">s2maps.eu</a> by <a href="https://eox.at">EOX IT Services GmbH</a>',
+        });
+      } catch (e) {
+        // Ignored if sentinel-2 is not supported
+      }
+    }
   }, [onAoiChange, mapRef]);
 
   // Sync AOI from props to draw tool (for auto-selection and deletion)
@@ -254,41 +298,28 @@ export default function MapView({
     }
   }, [appState]);
 
-  if (!MAPBOX_TOKEN) {
-    return (
-      <div className="absolute inset-0 flex items-center justify-center bg-surface-0">
-        <div className="glass-panel p-8 max-w-md text-center">
-          <h2 className="text-lg font-semibold text-white mb-3">
-            Mapbox Token Required
-          </h2>
-          <p className="text-slate-400 text-sm leading-relaxed">
-            Set{" "}
-            <code className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-xs font-mono">
-              VITE_MAPBOX_TOKEN
-            </code>{" "}
-            in your{" "}
-            <code className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-xs font-mono">
-              frontend/.env
-            </code>{" "}
-            file.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="relative w-full h-full">
       <Map
         ref={mapRef}
-        mapboxAccessToken={MAPBOX_TOKEN}
+        mapboxAccessToken={
+          MAPBOX_TOKEN && !MAPBOX_TOKEN.includes("mr-x")
+            ? MAPBOX_TOKEN
+            : "pk.eyJ1IjoicHVibGljLWVzcmkiLCJhIjoiY2twdWJsaWMifQ.dummy"
+        }
         initialViewState={{
           longitude: 78.9629,
           latitude: 20.5937,
           zoom: 4,
         }}
         style={{ width: "100%", height: "100%" }}
-        mapStyle="mapbox://styles/mapbox/satellite-streets-v12"
+        mapStyle={currentStyle}
+        onError={(e) => {
+          console.warn("Map style failed or token invalid, falling back to open ESRI satellite:", e);
+          if (currentStyle !== OPEN_SATELLITE_STYLE) {
+            setCurrentStyle(OPEN_SATELLITE_STYLE);
+          }
+        }}
         onLoad={handleMapLoad}
         attributionControl={false}
       >

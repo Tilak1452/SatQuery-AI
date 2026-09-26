@@ -128,23 +128,57 @@ export default function SearchBar({
     // 2. Call Mapbox Geocoding API
     const fetchPlaces = async () => {
       setIsLoading(true);
-      try {
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-          query
-        )}.json?access_token=${MAPBOX_TOKEN}&types=country,region,postcode,district,place,locality,neighborhood,address,poi`;
+        let foundPlaces = false;
+        if (MAPBOX_TOKEN && !MAPBOX_TOKEN.includes("mr-x")) {
+          const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+            query
+          )}.json?access_token=${MAPBOX_TOKEN}&types=country,region,postcode,district,place,locality,neighborhood,address,poi`;
 
-        const res = await fetch(url);
-        const data = await res.json();
+          const res = await fetch(url);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.features && data.features.length > 0) {
+              const formattedResults = data.features.map((f: any) => ({
+                id: f.id,
+                place_name: f.place_name,
+                center: f.center,
+                bbox: f.bbox,
+              }));
+              setResults(formattedResults);
+              setIsOpen(true);
+              foundPlaces = true;
+            }
+          }
+        }
 
-        if (data.features) {
-          const formattedResults = data.features.map((f: any) => ({
-            id: f.id,
-            place_name: f.place_name,
-            center: f.center,
-            bbox: f.bbox,
-          }));
-          setResults(formattedResults);
-          setIsOpen(true);
+        // OpenStreetMap Nominatim Fallback (No API key required)
+        if (!foundPlaces) {
+          const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+            query
+          )}&limit=5`;
+          const nomRes = await fetch(nomUrl, {
+            headers: { "Accept-Language": "en" },
+          });
+          if (nomRes.ok) {
+            const nomData = await nomRes.json();
+            if (Array.isArray(nomData) && nomData.length > 0) {
+              const formattedResults = nomData.map((item: any) => ({
+                id: item.place_id ? String(item.place_id) : String(Math.random()),
+                place_name: item.display_name,
+                center: [parseFloat(item.lon), parseFloat(item.lat)] as [number, number],
+                bbox: item.boundingbox
+                  ? ([
+                      parseFloat(item.boundingbox[2]),
+                      parseFloat(item.boundingbox[0]),
+                      parseFloat(item.boundingbox[3]),
+                      parseFloat(item.boundingbox[1]),
+                    ] as [number, number, number, number])
+                  : undefined,
+              }));
+              setResults(formattedResults);
+              setIsOpen(true);
+            }
+          }
         }
       } catch (err) {
         console.error("Geocoding error:", err);
