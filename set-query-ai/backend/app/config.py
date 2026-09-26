@@ -26,6 +26,10 @@ class Settings(BaseSettings):
         default="krishi-dhristi",
         description="Google Cloud Project ID for Earth Engine",
     )
+    user_email: str = Field(
+        default="",
+        description="User contact or university email",
+    )
 
     # CORS
     frontend_origin: str = Field(
@@ -55,6 +59,7 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore",
     }
 
 
