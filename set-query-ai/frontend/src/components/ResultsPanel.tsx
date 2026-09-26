@@ -20,8 +20,6 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
-  Layers,
-  Sparkles,
   CheckCircle2,
   Loader2,
 } from "lucide-react";
