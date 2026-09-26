@@ -73,3 +73,10 @@ Thumbs.db
 # Log files
 *.log
 logs/
+
+# Local developer logs & commit histories (NEVER COMMIT TO GITHUB)
+GIT_COMMIT_LOG.md
+git_commit_log.md
+Git_Commit_Log.md
+*commit_log*.md
+
