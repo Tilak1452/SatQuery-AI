@@ -16,8 +16,11 @@ import type {
   ZipProgressMessage,
 } from "../types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const WS_BASE = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000";
+const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+export const API_BASE = RAW_API_BASE.replace(/\/+$/, "");
+export const WS_BASE =
+  import.meta.env.VITE_WS_BASE_URL ||
+  API_BASE.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
 
 /**
  * Approximate area of a GeoJSON polygon in km² (client-side validation).

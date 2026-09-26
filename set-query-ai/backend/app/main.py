@@ -116,22 +116,47 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        settings.frontend_origin,
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS configuration — support Vercel domains, localhost, and custom frontend_origin
+cors_origins = [
+    origin.strip()
+    for origin in settings.frontend_origin.split(",")
+    if origin.strip()
+]
+for local in ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]:
+    if local not in cors_origins:
+        cors_origins.append(local)
 
-# Mount input_images for serving uploaded custom files
+if "*" in cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_origin_regex=r"https://.*\.vercel\.app",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Mount input_images for serving uploaded/processed files
 os.makedirs("input_images", exist_ok=True)
 app.mount("/images", StaticFiles(directory="input_images"), name="images")
+
+
+# ---------------------------------------------------------------------------
+# Healthcheck Endpoint (For Uptime monitoring & zero-downtime pingers)
+# ---------------------------------------------------------------------------
+
+@app.get("/healthz")
+async def health_check():
+    """Lightweight healthcheck for uptime monitoring and zero-downtime pingers."""
+    return {"status": "ok", "service": "SatQuery AI", "version": "0.2.0"}
 
 
 # ---------------------------------------------------------------------------

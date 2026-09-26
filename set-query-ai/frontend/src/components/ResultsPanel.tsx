@@ -34,7 +34,15 @@ interface ResultsPanelProps {
   onClose: () => void;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE = RAW_API_BASE.replace(/\/+$/, "");
+
+function resolveUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  const path = url.startsWith("/") ? url : `/${url}`;
+  return `${API_BASE}${path}`;
+}
 
 export default function ResultsPanel({
   result,
@@ -49,11 +57,8 @@ export default function ResultsPanel({
   const isZipReady =
     zipProgress?.status === "ready" ||
     (result.zip_url !== null && result.zip_url !== undefined);
-  const zipDownloadUrl = result.zip_url
-    ? `${API_BASE}${result.zip_url}`
-    : zipProgress?.download_url
-    ? `${API_BASE}${zipProgress.download_url}`
-    : null;
+  const rawDownloadPath = result.zip_url || zipProgress?.download_url || null;
+  const zipDownloadUrl = resolveUrl(rawDownloadPath);
 
   const zipSizeMb = zipProgress?.size_mb || result.zip_size_mb || 0;
   const totalScenes = zipProgress?.total_scenes || result.total_scenes || (result.mode === "timeseries" ? 12 : 2);
