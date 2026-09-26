@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         description="Email address of the GEE service account",
     )
     gee_project: str = Field(
-        default="smart-caster-508412-q2",
+        default="krishi-dhristi",
         description="Google Cloud Project ID for Earth Engine",
     )
 
