@@ -35,7 +35,6 @@ def initialize_gee() -> None:
 
     try:
         if key_path.is_file():
-            # If project_id or email not explicitly set, attempt to read from the JSON key
             email = settings.gee_service_account_email
             try:
                 with open(key_path, "r", encoding="utf-8") as f:
@@ -57,19 +56,41 @@ def initialize_gee() -> None:
                 ee.Initialize(credentials)
             print(f"OK: Initialized Earth Engine with service account key: {key_path}")
         else:
-            print(f"Warning: GEE Service account key not found at '{key_path}'. Falling back to default local authentication.")
+            print(f"Info: Service account key not found at '{key_path}'. Using local Earth Engine user credentials.")
+            init_success = False
+            last_init_err = None
+
+            # 1. Try with configured project ID
             if project_id:
-                ee.Initialize(project=project_id)
-            else:
-                ee.Initialize()
-            print("OK: Initialized Earth Engine with default local credentials")
+                try:
+                    ee.Initialize(project=project_id)
+                    init_success = True
+                    print(f"OK: Initialized Earth Engine with project: {project_id}")
+                except Exception as p_err:
+                    last_init_err = p_err
+                    print(f"Notice: Initializing with project '{project_id}' gave: {p_err}. Trying default project...")
+
+            # 2. Try default without project parameter
+            if not init_success:
+                try:
+                    ee.Initialize()
+                    init_success = True
+                    print("OK: Initialized Earth Engine with default local project")
+                except Exception as def_err:
+                    last_init_err = def_err
+
+            if not init_success:
+                raise last_init_err or RuntimeError("Failed local Earth Engine initialization.")
+
         _initialized = True
     except Exception as e:
         raise RuntimeError(
-            f"Failed to initialize Google Earth Engine: {e}\n"
-            f"Expected service account key at: {key_path}\n"
-            "Please ensure you have placed your Google Cloud service account JSON key at that location, "
-            "or run 'earthengine authenticate' in your terminal for local account authentication."
+            f"Google Earth Engine is not authenticated on this machine: {e}\n\n"
+            "HOW TO FIX (One-time setup):\n"
+            "1. Run 'auth_gee.bat' in the project root (D:\\Satquery\\auth_gee.bat)\n"
+            "   (Or open terminal and run: earthengine authenticate)\n"
+            "2. Sign in with your Google account in the browser tab that opens.\n"
+            "3. Click 'Allow', return here, and click 'Get Imagery' again."
         ) from e
 
 
@@ -81,4 +102,3 @@ def get_ee():
     if not _initialized:
         initialize_gee()
     return ee
-

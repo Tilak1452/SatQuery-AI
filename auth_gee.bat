@@ -8,11 +8,14 @@ echo   A browser window will open to sign in with Google.
 echo ========================================================
 
 call venv\Scripts\activate.bat
-python -c "import ee; ee.Authenticate()"
+
+echo Running Earth Engine authentication...
+call venv\Scripts\earthengine.exe authenticate
 
 echo.
 echo ========================================================
-echo   Authentication complete! You can now close this window
-echo   and click 'Retry' on the map.
+echo   Authentication complete!
+echo   You can now close this window, return to your browser,
+echo   and click 'Get Imagery' again.
 echo ========================================================
 pause
