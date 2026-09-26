@@ -1,0 +1,74 @@
+# Node dependencies
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python virtual environment & bytecode
+venv/
+**/venv/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+**/dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Linting caches
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.coverage
+htmlcov/
+.oxlint-cache/
+
+# Sensitive environment variables & secrets (NEVER COMMIT)
+.env
+**/.env
+.env.local
+.env.*.local
+*.env
+!*.env.example
+secrets/*
+**/secrets/*
+!**/secrets/.gitkeep
+credentials.json
+service-account*.json
+*.pem
+*.key
+
+# Runtime uploaded / processed imagery (keep dir with .gitkeep)
+**/input_images/*
+!**/input_images/.gitkeep
+
+# System / IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log files
+*.log
+logs/
