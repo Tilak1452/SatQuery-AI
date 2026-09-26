@@ -18,6 +18,7 @@ import shutil
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+import functools
 from typing import Any
 
 import cv2
@@ -151,7 +152,8 @@ async def run_with_backoff(
 
     for attempt in range(max_retries):
         try:
-            return await loop.run_in_executor(None, func, *args, **kwargs)
+            call_func = functools.partial(func, *args, **kwargs)
+            return await loop.run_in_executor(None, call_func)
         except Exception as exc:
             last_exc = exc
             err_str = str(exc).lower()
