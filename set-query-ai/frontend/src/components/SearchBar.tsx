@@ -128,6 +128,7 @@ export default function SearchBar({
     // 2. Call Mapbox Geocoding API
     const fetchPlaces = async () => {
       setIsLoading(true);
+      try {
         let foundPlaces = false;
         if (MAPBOX_TOKEN && !MAPBOX_TOKEN.includes("mr-x")) {
           const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
