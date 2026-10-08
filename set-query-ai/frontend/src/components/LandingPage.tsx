@@ -9,7 +9,7 @@
  * 5. How to launch the extraction studio and return anytime via the Back button.
  */
 
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   Satellite,
   Layers,
@@ -25,8 +25,6 @@ import {
   Sparkles,
   Zap,
   MapPin,
-  ExternalLink,
-  ChevronRight,
   Search,
   Maximize2,
   Cpu,
@@ -46,7 +44,6 @@ export default function LandingPage({
   hasActiveAoi = false,
   hasResults = false,
 }: LandingPageProps) {
-  const [activeTab, setActiveTab] = useState<"all" | "single" | "timeseries">("all");
   const [activeStep, setActiveStep] = useState<number>(1);
 
   const scrollToSection = (id: string) => {
@@ -140,7 +137,7 @@ export default function LandingPage({
               onClick={() => onLaunchStudio()}
               className="relative group px-4 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 transition-all duration-300 shadow-[0_0_20px_rgba(16,185,129,0.35)] hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] flex items-center gap-1.5"
             >
-              <span>{hasActiveAoi ? "Resume Studio" : "Launch Extractor"}</span>
+              <span>{hasActiveAoi || hasResults ? "Resume Studio" : "Launch Extractor"}</span>
               <ArrowRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
             </button>
           </div>
@@ -826,7 +823,7 @@ export default function LandingPage({
               onClick={() => onLaunchStudio()}
               className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-500 hover:bg-emerald-400 transition-all flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
             >
-              <span>{hasActiveAoi ? "Return to Active Session" : "Go to Map Studio"}</span>
+              <span>{hasActiveAoi || hasResults ? "Return to Active Session" : "Go to Map Studio"}</span>
               <ArrowRight size={14} />
             </button>
           </div>

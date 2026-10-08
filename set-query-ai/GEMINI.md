@@ -940,6 +940,7 @@ node check.js                          # Headless browser smoke test on :5173
   - Extended `ProcessingState` with `mode` and `zipProgress` fields
   - WebSocket handler processes `zip_progress` message type
   - Fixed syntax in SearchBar.tsx (restored try block in fetchPlaces) and LandingPage.tsx (properly closed td tag)
+  - Cleaned up unused imports and state variables in LandingPage.tsx for strict Vercel TypeScript build (TS6133)
   - Fixed unused imports in `ResultsPanel.tsx` (TypeScript build error)
   - Created `vercel.json` for SPA routing on Vercel
 - **Deployment:**
